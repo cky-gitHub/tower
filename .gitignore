@@ -8,4 +8,5 @@ build/
 *.iml
 out/
 dist/
+plugin/src/main/resources/webview/
 .DS_Store

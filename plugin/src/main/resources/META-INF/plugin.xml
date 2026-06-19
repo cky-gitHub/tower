@@ -1,0 +1,14 @@
+<idea-plugin>
+  <id>com.tower</id>
+  <name>Tower</name>
+  <vendor email="support@tower.dev">Tower</vendor>
+  <description><![CDATA[
+    Mission control for a fleet of Devin sessions. Orchestrate, observe, and redirect agents from a node graph.
+  ]]></description>
+
+  <depends>com.intellij.modules.platform</depends>
+
+  <extensions defaultExtensionNs="com.intellij">
+    <toolWindow id="Tower" factoryClass="com.tower.DevinControlToolWindowFactory" anchor="right"/>
+  </extensions>
+</idea-plugin>
