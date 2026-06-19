@@ -1,0 +1,11 @@
+.env
+.env.*
+!.env.example
+node_modules/
+build/
+.gradle/
+.idea/
+*.iml
+out/
+dist/
+.DS_Store
