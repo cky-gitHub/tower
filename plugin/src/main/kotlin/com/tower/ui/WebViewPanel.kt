@@ -1,6 +1,9 @@
 package com.tower.ui
 
 import com.intellij.ui.jcef.JBCefBrowser
+import org.cef.browser.CefBrowser
+import org.cef.browser.CefFrame
+import org.cef.handler.CefLoadHandlerAdapter
 import java.awt.BorderLayout
 import java.net.URLDecoder
 import java.nio.charset.StandardCharsets
@@ -11,10 +14,41 @@ import javax.swing.JPanel
 
 class WebViewPanel : JPanel(BorderLayout()) {
     private val browser = JBCefBrowser()
+    private val bridge = JBCefBridge(browser)
 
     init {
+        bridge.handle("ping") { "pong" }
+        browser.jbCefClient.addLoadHandler(object : CefLoadHandlerAdapter() {
+            override fun onLoadEnd(browser: CefBrowser, frame: CefFrame, httpStatusCode: Int) {
+                if (frame.isMain) {
+                    browser.executeJavaScript(bridge.injectFunction(), frame.url, 0)
+                }
+            }
+        }, browser.cefBrowser)
         add(browser.component, BorderLayout.CENTER)
-        browser.loadURL(extractWebview().resolve("index.html").toUri().toString())
+        val webviewDir = extractWebview()
+        browser.loadHTML(createInlineHtml(webviewDir), webviewDir.resolve("index.html").toUri().toString())
+    }
+
+    private fun createInlineHtml(webviewDir: Path): String {
+        val html = Files.readString(webviewDir.resolve("index.html"))
+        val assetsDir = webviewDir.resolve("assets")
+        val css = Files.list(assetsDir).use { paths ->
+            paths.filter { it.fileName.toString().endsWith(".css") }
+                .findFirst()
+                .map { Files.readString(it) }
+                .orElse("")
+        }
+        val js = Files.list(assetsDir).use { paths ->
+            paths.filter { it.fileName.toString().endsWith(".js") }
+                .findFirst()
+                .map { Files.readString(it) }
+                .orElse("")
+        }
+
+        return html
+            .replace(Regex("<link[^>]+href=\"\\./assets/[^\"]+\\.css\"[^>]*>"), "<style>$css</style>")
+            .replace(Regex("<script[^>]+src=\"\\./assets/[^\"]+\\.js\"[^>]*></script>"), "<script>$js</script>")
     }
 
     private fun extractWebview(): Path {
