@@ -1,0 +1,62 @@
+{
+  "name": "tower",
+  "displayName": "Tower",
+  "description": "Mission control for a fleet of AI coding agents — orchestrate, observe, and redirect without leaving VS Code",
+  "version": "0.1.0",
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": ["Other"],
+  "activationEvents": [],
+  "main": "./out/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "tower.open",
+        "title": "Tower: Open Agent Canvas"
+      }
+    ],
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "tower",
+          "title": "Tower",
+          "icon": "$(radio-tower)"
+        }
+      ]
+    },
+    "configuration": {
+      "title": "Tower",
+      "properties": {
+        "tower.defaultProvider": {
+          "type": "string",
+          "enum": ["claude", "devin"],
+          "default": "claude",
+          "description": "Default agent provider"
+        },
+        "tower.devin.orgId": {
+          "type": "string",
+          "default": "",
+          "description": "Devin organization ID"
+        }
+      }
+    }
+  },
+  "scripts": {
+    "compile": "tsc -p tsconfig.json",
+    "watch": "tsc -watch -p tsconfig.json",
+    "build:webview": "cd ../webview && npm install && npm run build && cp -r dist ../extension/webview-dist",
+    "build": "npm run build:webview && npm run compile",
+    "vscode:prepublish": "npm run build"
+  },
+  "dependencies": {
+    "node-fetch": "^3.3.2",
+    "uuid": "^9.0.1"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "@types/uuid": "^9.0.7",
+    "@types/vscode": "^1.85.0",
+    "typescript": "^5.2.2"
+  }
+}
