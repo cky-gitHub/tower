@@ -13,9 +13,7 @@ export class TowerPanel {
   private messageUnsub?: () => void
 
   static createOrShow(extensionUri: vscode.Uri, manager: AgentManager) {
-    const column = vscode.window.activeTextEditor
-      ? vscode.window.activeTextEditor.viewColumn
-      : undefined
+    const column = vscode.window.activeTextEditor?.viewColumn
 
     if (TowerPanel.instance) {
       TowerPanel.instance.panel.reveal(column)
@@ -46,13 +44,11 @@ export class TowerPanel {
     this.panel.iconPath = new vscode.ThemeIcon('radio-tower')
     this.panel.webview.html = this.buildHtml()
 
-    // Fleet updates → webview
     const unsubFleet = manager.onFleetUpdate((sessions) => {
       this.send({ type: 'fleetUpdate', sessions })
     })
     this.disposables.push({ dispose: unsubFleet })
 
-    // Webview → extension host
     this.panel.webview.onDidReceiveMessage(
       (msg: WebviewToExt) => this.handleMessage(msg),
       null,
@@ -64,8 +60,9 @@ export class TowerPanel {
 
   private async handleMessage(msg: WebviewToExt) {
     const defaultProvider =
-      (vscode.workspace.getConfiguration('tower').get<string>('defaultProvider') as ProviderName) ??
-      'claude'
+      (vscode.workspace
+        .getConfiguration('tower')
+        .get<string>('defaultProvider') as ProviderName) ?? 'claude'
 
     switch (msg.type) {
       case 'ping':
@@ -110,11 +107,9 @@ export class TowerPanel {
       case 'getInsights':
         try {
           const summary = await this.manager.getInsights(msg.sessionId)
-          if (summary) {
-            this.send({ type: 'insightsUpdate', sessionId: msg.sessionId, summary })
-          }
+          if (summary) this.send({ type: 'insightsUpdate', sessionId: msg.sessionId, summary })
         } catch {
-          // insights not available
+          // insights unavailable
         }
         break
 
@@ -135,29 +130,33 @@ export class TowerPanel {
   private buildHtml(): string {
     const webview = this.panel.webview
     const distDir = vscode.Uri.joinPath(this.extensionUri, 'webview-dist')
-
-    // Read the built index.html and resolve asset URIs for the webview sandbox
     const indexPath = path.join(distDir.fsPath, 'index.html')
+
     if (!fs.existsSync(indexPath)) {
       return this.fallbackHtml()
     }
 
     let html = fs.readFileSync(indexPath, 'utf8')
 
-    // Replace ./assets/... paths with webview-safe URIs
+    // Rewrite ./assets/... paths to webview-safe URIs
     html = html.replace(/(src|href)="\.\/assets\/([^"]+)"/g, (_match, attr, file) => {
       const uri = webview.asWebviewUri(vscode.Uri.joinPath(distDir, 'assets', file))
       return `${attr}="${uri}"`
     })
 
-    // Add CSP
-    const nonce = getNonce()
+    // VS Code-standard CSP: allow scripts and styles from localResourceRoots only
+    const csp = [
+      `default-src 'none'`,
+      `script-src ${webview.cspSource}`,
+      `style-src ${webview.cspSource} 'unsafe-inline'`,
+      `img-src ${webview.cspSource} data:`,
+      `font-src ${webview.cspSource}`,
+    ].join('; ')
+
     html = html.replace(
       '<head>',
-      `<head>
-      <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src ${webview.cspSource} 'unsafe-inline'; script-src 'nonce-${nonce}' ${webview.cspSource};">`
+      `<head>\n  <meta http-equiv="Content-Security-Policy" content="${csp}">`
     )
-    html = html.replace(/<script /g, `<script nonce="${nonce}" `)
 
     return html
   }
@@ -166,11 +165,9 @@ export class TowerPanel {
     return `<!DOCTYPE html>
 <html>
 <head><meta charset="UTF-8"><title>Tower</title></head>
-<body style="background:#0a0e1a;color:#fff;font-family:sans-serif;display:flex;align-items:center;justify-content:center;height:100vh;margin:0">
-  <div style="text-align:center">
-    <h2>Tower webview not built</h2>
-    <p>Run <code>npm run build</code> in the <code>webview/</code> directory, then reload VS Code.</p>
-  </div>
+<body style="background:#0a0e1a;color:#fff;font-family:sans-serif;display:flex;align-items:center;justify-content:center;height:100vh;margin:0;flex-direction:column;gap:12px">
+  <h2 style="margin:0">Tower — webview not built</h2>
+  <p style="margin:0;color:#6b7280;font-size:14px">Run <code style="background:#1f2937;padding:2px 6px;border-radius:4px">cd extension && npm run build</code> then reload VS Code.</p>
 </body>
 </html>`
   }
@@ -181,9 +178,4 @@ export class TowerPanel {
     this.disposables.forEach((d) => d.dispose())
     this.panel.dispose()
   }
-}
-
-function getNonce() {
-  const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789'
-  return Array.from({ length: 32 }, () => chars[Math.floor(Math.random() * chars.length)]).join('')
 }

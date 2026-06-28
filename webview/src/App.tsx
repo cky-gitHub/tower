@@ -1,31 +1,30 @@
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 import { bridge } from './bridge'
 import type { AgentSession, AgentMessage } from './bridge'
+import Canvas from './Canvas'
 
 type ExtToWebview = import('../../extension/src/types').ExtToWebview
 
-const STATUS_COLOR: Record<string, string> = {
-  running: '#22c55e',
-  blocked: '#eab308',
-  done: '#3b82f6',
-  errored: '#ef4444',
-  stopped: '#6b7280',
-}
-
 export default function App() {
   const [sessions, setSessions] = useState<AgentSession[]>([])
-  const [selected, setSelected] = useState<string | null>(null)
+  const [selectedId, setSelectedId] = useState<string | null>(null)
   const [messages, setMessages] = useState<AgentMessage[]>([])
   const [insights, setInsights] = useState<string | null>(null)
   const [showSpawn, setShowSpawn] = useState(false)
   const [spawnPrompt, setSpawnPrompt] = useState('')
   const [redirectText, setRedirectText] = useState('')
   const [toast, setToast] = useState<string | null>(null)
+  const messagesEndRef = useRef<HTMLDivElement>(null)
 
-  const showToast = (msg: string) => {
+  const showToast = useCallback((msg: string) => {
     setToast(msg)
     setTimeout(() => setToast(null), 3000)
-  }
+  }, [])
+
+  // Scroll messages to bottom on new content
+  useEffect(() => {
+    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
+  }, [messages])
 
   useEffect(() => {
     const unsub = bridge.onMessage((msg: ExtToWebview) => {
@@ -34,14 +33,12 @@ export default function App() {
           setSessions(msg.sessions)
           break
         case 'messagesAppend':
-          if (msg.sessionId === selected) {
+          if (msg.sessionId === selectedId) {
             setMessages((prev) => [...prev, ...msg.messages])
           }
           break
         case 'insightsUpdate':
-          if (msg.sessionId === selected) {
-            setInsights(msg.summary)
-          }
+          if (msg.sessionId === selectedId) setInsights(msg.summary)
           break
         case 'error':
           showToast(`Error: ${msg.message}`)
@@ -49,166 +46,148 @@ export default function App() {
       }
     })
     return unsub
-  }, [selected])
+  }, [selectedId, showToast])
+
+  // Keyboard shortcut: ⌘N / Ctrl+N to spawn
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && e.key === 'n') {
+        e.preventDefault()
+        setShowSpawn(true)
+      }
+      if (e.key === 'Escape') {
+        setShowSpawn(false)
+        setSelectedId(null)
+      }
+    }
+    window.addEventListener('keydown', handler)
+    return () => window.removeEventListener('keydown', handler)
+  }, [])
 
   const selectSession = useCallback(
     (id: string) => {
-      if (selected) bridge.send({ type: 'unsubscribeMessages', sessionId: selected })
-      setSelected(id)
+      if (selectedId) bridge.send({ type: 'unsubscribeMessages', sessionId: selectedId })
+      setSelectedId(id)
       setMessages([])
       setInsights(null)
       bridge.send({ type: 'subscribeMessages', sessionId: id })
       bridge.send({ type: 'getInsights', sessionId: id })
     },
-    [selected]
+    [selectedId]
   )
 
-  const spawnAgent = () => {
-    if (!spawnPrompt.trim()) return
-    bridge.send({ type: 'spawn', prompt: spawnPrompt.trim() })
+  const spawnAgent = useCallback(() => {
+    const prompt = spawnPrompt.trim()
+    if (!prompt) return
+    bridge.send({ type: 'spawn', prompt })
     setSpawnPrompt('')
     setShowSpawn(false)
     showToast('Agent spawning…')
-  }
+  }, [spawnPrompt, showToast])
 
-  const sendRedirect = () => {
-    if (!selected || !redirectText.trim()) return
-    bridge.send({ type: 'sendMessage', sessionId: selected, text: redirectText.trim() })
+  const sendRedirect = useCallback(() => {
+    if (!selectedId || !redirectText.trim()) return
+    bridge.send({ type: 'sendMessage', sessionId: selectedId, text: redirectText.trim() })
     setRedirectText('')
     showToast('Message sent ✓')
-  }
+  }, [selectedId, redirectText, showToast])
 
-  const stopSession = (id: string) => {
-    bridge.send({ type: 'stop', sessionId: id })
-    if (selected === id) setSelected(null)
-  }
+  const stopSession = useCallback(
+    (id: string) => {
+      bridge.send({ type: 'stop', sessionId: id })
+      if (selectedId === id) setSelectedId(null)
+    },
+    [selectedId]
+  )
 
-  const selectedSession = sessions.find((s) => s.id === selected)
+  const selectedSession = sessions.find((s) => s.id === selectedId)
 
   return (
-    <div className="flex h-screen w-full bg-[#0a0e1a] text-white overflow-hidden">
-      {/* Canvas / fleet list */}
-      <div className="flex-1 flex flex-col overflow-hidden relative">
-        <div className="p-4 border-b border-gray-800 flex items-center justify-between">
-          <h1 className="text-lg font-bold tracking-wide">Tower</h1>
-          <button
-            onClick={() => setShowSpawn(true)}
-            className="w-8 h-8 rounded-full bg-blue-600 hover:bg-blue-500 flex items-center justify-center text-xl font-bold"
-            title="Spawn new agent"
-          >
-            +
-          </button>
-        </div>
-
-        <div className="flex-1 overflow-y-auto p-4 space-y-2">
-          {sessions.length === 0 && (
-            <div className="flex flex-col items-center justify-center h-full text-gray-500">
-              <p className="text-4xl mb-3">◎</p>
-              <p>No agents online.</p>
-              <p className="text-sm">Tap + to spawn.</p>
-            </div>
-          )}
-
-          {sessions.map((s) => {
-            const color = STATUS_COLOR[s.status] ?? '#6b7280'
-            const isSelected = s.id === selected
-            return (
-              <div
-                key={s.id}
-                onClick={() => selectSession(s.id)}
-                className={`rounded-lg p-3 cursor-pointer border transition-all ${
-                  isSelected
-                    ? 'border-blue-500 bg-blue-950/40'
-                    : 'border-gray-700 hover:border-gray-500 bg-gray-900/40'
-                }`}
-              >
-                <div className="flex items-center gap-2">
-                  <span
-                    className="w-2.5 h-2.5 rounded-full flex-shrink-0"
-                    style={{
-                      backgroundColor: color,
-                      boxShadow: s.status === 'running' ? `0 0 8px ${color}` : undefined,
-                    }}
-                  />
-                  <span className="font-medium text-sm truncate flex-1">{s.title}</span>
-                  <span className="text-xs px-1.5 py-0.5 rounded" style={{ color, border: `1px solid ${color}40` }}>
-                    {s.status}
-                  </span>
-                  <span className="text-xs text-gray-600 ml-1 capitalize">{s.provider}</span>
-                </div>
-                {s.lastMessage && (
-                  <p className="text-xs text-gray-400 mt-1.5 pl-5 truncate">{s.lastMessage}</p>
-                )}
-              </div>
-            )
-          })}
-        </div>
+    <div className="flex h-screen w-full overflow-hidden bg-[#0a0e1a] text-white">
+      {/* Main canvas */}
+      <div className="flex-1 min-w-0 relative">
+        <Canvas
+          sessions={sessions}
+          selectedId={selectedId}
+          onSelect={selectSession}
+          onSpawn={() => setShowSpawn(true)}
+        />
       </div>
 
       {/* Side panel */}
       {selectedSession && (
-        <div className="w-80 border-l border-gray-800 flex flex-col bg-gray-950/50">
-          <div className="p-3 border-b border-gray-800 flex items-start justify-between gap-2">
-            <div className="flex-1 min-w-0">
-              <p className="font-semibold text-sm truncate">{selectedSession.title}</p>
-              <p className="text-xs text-gray-400 mt-0.5 capitalize">
-                {selectedSession.provider} · {selectedSession.status}
-                {selectedSession.acuConsumed != null && ` · ${selectedSession.acuConsumed} ACU`}
-              </p>
-            </div>
-            <div className="flex gap-1 flex-shrink-0">
-              <button
-                onClick={() => stopSession(selectedSession.id)}
-                className="text-xs px-2 py-1 rounded bg-red-900/40 hover:bg-red-800/60 text-red-400"
-              >
-                Stop
-              </button>
-              <button
-                onClick={() => setSelected(null)}
-                className="text-xs px-2 py-1 rounded bg-gray-800 hover:bg-gray-700 text-gray-400"
-              >
-                ✕
-              </button>
+        <div className="w-72 flex-shrink-0 border-l border-gray-800 flex flex-col bg-[#0d1117]">
+          {/* Header */}
+          <div className="p-3 border-b border-gray-800">
+            <div className="flex items-start justify-between gap-2">
+              <div className="flex-1 min-w-0">
+                <p className="text-sm font-semibold truncate leading-tight">{selectedSession.title}</p>
+                <p className="text-[10px] text-gray-500 mt-0.5 capitalize">
+                  {selectedSession.provider} · {selectedSession.status}
+                  {selectedSession.acuConsumed != null && ` · ${selectedSession.acuConsumed} ACU`}
+                </p>
+              </div>
+              <div className="flex gap-1 flex-shrink-0">
+                <button
+                  onClick={() => stopSession(selectedSession.id)}
+                  className="text-[10px] px-2 py-1 rounded bg-red-950/60 hover:bg-red-900/60 text-red-400 border border-red-900/40"
+                >
+                  Stop
+                </button>
+                <button
+                  onClick={() => setSelectedId(null)}
+                  className="text-[10px] px-2 py-1 rounded bg-gray-800 hover:bg-gray-700 text-gray-400"
+                >
+                  ✕
+                </button>
+              </div>
             </div>
           </div>
 
-          {/* Messages */}
-          <div className="flex-1 overflow-y-auto p-3 space-y-2">
+          {/* Message stream */}
+          <div className="flex-1 overflow-y-auto p-3 space-y-1.5">
+            {messages.length === 0 && (
+              <p className="text-[10px] text-gray-700 italic text-center pt-6">
+                Waiting for output…
+              </p>
+            )}
             {messages.map((m) => (
               <div
                 key={m.id}
-                className={`text-xs rounded p-2 ${
+                className={`text-[11px] rounded px-2 py-1.5 leading-relaxed ${
                   m.source === 'user'
-                    ? 'bg-blue-900/40 text-blue-200 ml-4'
+                    ? 'bg-blue-900/30 text-blue-200 ml-3'
                     : m.source === 'system'
-                    ? 'text-gray-500 italic'
-                    : 'bg-gray-800/60 text-gray-200'
+                    ? 'text-gray-600 italic text-[10px]'
+                    : 'bg-gray-800/50 text-gray-200'
                 }`}
               >
-                <span className="font-medium mr-1 opacity-60">
-                  {m.source === 'user' ? 'You' : m.source === 'system' ? '·' : 'Agent'}
-                </span>
-                {m.text}
+                {m.source !== 'system' && (
+                  <span className="font-medium opacity-50 mr-1">
+                    {m.source === 'user' ? 'You' : 'Agent'}
+                  </span>
+                )}
+                <span className="whitespace-pre-wrap break-words">{m.text}</span>
               </div>
             ))}
-            {messages.length === 0 && (
-              <p className="text-xs text-gray-600 italic text-center pt-4">Waiting for output…</p>
-            )}
+            <div ref={messagesEndRef} />
           </div>
 
           {/* Insights */}
           {insights && (
-            <div className="p-3 border-t border-gray-800 text-xs text-gray-400 bg-gray-900/30">
-              <p className="font-semibold text-gray-300 mb-1">AI Summary</p>
-              <p className="line-clamp-3">{insights}</p>
+            <div className="px-3 py-2 border-t border-gray-800 bg-gray-950/50">
+              <p className="text-[10px] font-semibold text-gray-500 uppercase tracking-wide mb-1">
+                Summary
+              </p>
+              <p className="text-[11px] text-gray-400 line-clamp-4 leading-relaxed">{insights}</p>
             </div>
           )}
 
-          {/* Redirect input */}
-          <div className="p-3 border-t border-gray-800">
-            <div className="flex gap-2">
+          {/* Redirect */}
+          <div className="p-2 border-t border-gray-800">
+            <div className="flex gap-1.5">
               <input
-                className="flex-1 bg-gray-800 rounded px-2 py-1.5 text-xs placeholder-gray-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
+                className="flex-1 bg-gray-800/80 rounded px-2.5 py-1.5 text-xs placeholder-gray-600 focus:outline-none focus:ring-1 focus:ring-blue-500 min-w-0"
                 placeholder="Redirect agent…"
                 value={redirectText}
                 onChange={(e) => setRedirectText(e.target.value)}
@@ -216,7 +195,7 @@ export default function App() {
               />
               <button
                 onClick={sendRedirect}
-                className="text-xs px-2 py-1.5 rounded bg-blue-600 hover:bg-blue-500 font-medium"
+                className="text-xs px-2.5 py-1.5 rounded bg-blue-600 hover:bg-blue-500 font-medium flex-shrink-0"
               >
                 Send
               </button>
@@ -227,13 +206,19 @@ export default function App() {
 
       {/* Spawn modal */}
       {showSpawn && (
-        <div className="absolute inset-0 bg-black/70 flex items-center justify-center z-10">
-          <div className="bg-gray-900 border border-gray-700 rounded-xl p-6 w-[480px] shadow-2xl">
-            <h2 className="font-bold text-lg mb-4">Spawn Agent</h2>
+        <div
+          className="absolute inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-20"
+          onClick={(e) => e.target === e.currentTarget && setShowSpawn(false)}
+        >
+          <div className="bg-gray-900 border border-gray-700 rounded-xl p-6 w-[440px] shadow-2xl">
+            <h2 className="font-semibold text-base mb-1">Spawn Agent</h2>
+            <p className="text-xs text-gray-500 mb-4">
+              Describe the task. Claude Code will handle it in your workspace.
+            </p>
             <textarea
               autoFocus
-              className="w-full h-32 bg-gray-800 rounded-lg p-3 text-sm placeholder-gray-500 focus:outline-none focus:ring-1 focus:ring-blue-500 resize-none"
-              placeholder="Describe the task for this agent…"
+              className="w-full h-28 bg-gray-800 rounded-lg p-3 text-sm placeholder-gray-600 focus:outline-none focus:ring-1 focus:ring-blue-500 resize-none"
+              placeholder="e.g. Write unit tests for src/auth/login.ts using the existing test patterns"
               value={spawnPrompt}
               onChange={(e) => setSpawnPrompt(e.target.value)}
               onKeyDown={(e) => {
@@ -244,15 +229,15 @@ export default function App() {
             <div className="flex justify-end gap-2 mt-3">
               <button
                 onClick={() => setShowSpawn(false)}
-                className="px-4 py-2 rounded-lg bg-gray-700 hover:bg-gray-600 text-sm"
+                className="px-3 py-1.5 rounded-lg bg-gray-700 hover:bg-gray-600 text-sm"
               >
                 Cancel
               </button>
               <button
                 onClick={spawnAgent}
-                className="px-4 py-2 rounded-lg bg-blue-600 hover:bg-blue-500 text-sm font-medium"
+                className="px-3 py-1.5 rounded-lg bg-blue-600 hover:bg-blue-500 text-sm font-medium"
               >
-                Spawn ⌘↵
+                Spawn <span className="opacity-50 ml-1 text-xs">⌘↵</span>
               </button>
             </div>
           </div>
@@ -261,7 +246,7 @@ export default function App() {
 
       {/* Toast */}
       {toast && (
-        <div className="absolute bottom-4 left-1/2 -translate-x-1/2 bg-gray-800 text-sm px-4 py-2 rounded-full shadow-lg border border-gray-600">
+        <div className="absolute bottom-5 left-1/2 -translate-x-1/2 bg-gray-800 text-xs px-4 py-2 rounded-full shadow-xl border border-gray-700 z-30 pointer-events-none">
           {toast}
         </div>
       )}

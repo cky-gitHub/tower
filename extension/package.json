@@ -34,6 +34,11 @@
           "default": "claude",
           "description": "Default agent provider"
         },
+        "tower.claude.path": {
+          "type": "string",
+          "default": "",
+          "description": "Path to the claude CLI binary. Leave empty to use 'claude' from PATH. Example: /usr/local/bin/claude"
+        },
         "tower.devin.orgId": {
           "type": "string",
           "default": "",

@@ -10,4 +10,93 @@ body {
     sans-serif;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
+  background: #0a0e1a;
+  color: #fff;
+}
+
+/* ── Agent node card ── */
+.agent-node {
+  background: #0f1624;
+  border: 1px solid;
+  border-radius: 8px;
+  padding: 10px 12px;
+  width: 190px;
+  cursor: pointer;
+  transition: box-shadow 0.25s ease;
+  box-shadow: 0 0 0 0 transparent;
+}
+
+.agent-node--running {
+  animation: node-glow 2.4s ease-in-out infinite;
+}
+
+.agent-node--selected {
+  box-shadow: 0 0 0 2px #3b82f6, 0 0 16px rgba(59,130,246,0.4) !important;
+  animation: none !important;
+}
+
+@keyframes node-glow {
+  0%, 100% {
+    box-shadow: 0 0 6px color-mix(in srgb, var(--glow) 30%, transparent);
+  }
+  50% {
+    box-shadow:
+      0 0 16px color-mix(in srgb, var(--glow) 70%, transparent),
+      0 0 32px color-mix(in srgb, var(--glow) 30%, transparent);
+  }
+}
+
+/* ── ReactFlow overrides ── */
+.react-flow__node {
+  border-radius: 8px;
+}
+
+.react-flow__node.selected .agent-node {
+  box-shadow: 0 0 0 2px #3b82f6, 0 0 16px rgba(59,130,246,0.4);
+  animation: none;
+}
+
+.react-flow__controls {
+  background: #111827 !important;
+  border: 1px solid #1f2937 !important;
+  border-radius: 8px !important;
+  box-shadow: none !important;
+}
+
+.react-flow__controls-button {
+  background: transparent !important;
+  border: none !important;
+  border-bottom: 1px solid #1f2937 !important;
+  color: #9ca3af !important;
+  fill: #9ca3af !important;
+}
+
+.react-flow__controls-button:hover {
+  background: #1f2937 !important;
+  fill: #fff !important;
+}
+
+.react-flow__controls-button:last-child {
+  border-bottom: none !important;
+}
+
+.react-flow__handle {
+  width: 6px !important;
+  height: 6px !important;
+  border: none !important;
+  opacity: 0;
+  transition: opacity 0.2s;
+}
+
+.react-flow__node:hover .react-flow__handle,
+.react-flow__node.selected .react-flow__handle {
+  opacity: 1;
+}
+
+.react-flow__edge-path {
+  stroke-width: 1.5;
+}
+
+.react-flow__background {
+  background: #0a0e1a !important;
 }

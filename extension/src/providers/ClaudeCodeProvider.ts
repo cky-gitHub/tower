@@ -8,19 +8,32 @@ interface RunningProcess {
   session: AgentSession
   messageBuffer: AgentMessage[]
   subscribers: Set<(msgs: AgentMessage[]) => void>
-  claudeSessionId?: string // captured from stream-json output
+  claudeSessionId?: string
 }
+
+// Common install locations for the claude CLI, tried in order
+const FALLBACK_PATHS = [
+  '/usr/local/bin/claude',
+  `${process.env.HOME ?? '~'}/.local/bin/claude`,
+  `${process.env.HOME ?? '~'}/.npm/bin/claude`,
+  `${process.env.HOME ?? '~'}/.npm-global/bin/claude`,
+]
 
 export class ClaudeCodeProvider implements AgentProvider {
   readonly name = 'claude'
 
   private processes = new Map<string, RunningProcess>()
-  private completedSessions = new Map<string, AgentSession>()
+  private completedSessions: AgentSession[] = []
+
+  /**
+   * @param claudePath Path to the `claude` binary. Defaults to `claude` (expects it in PATH).
+   *   Configure via `tower.claude.path` in VS Code settings if the binary is not on PATH.
+   */
+  constructor(private readonly claudePath: string = 'claude') {}
 
   async listSessions(): Promise<AgentSession[]> {
     const running = Array.from(this.processes.values()).map((r) => r.session)
-    const done = Array.from(this.completedSessions.values())
-    return [...running, ...done].sort((a, b) => b.createdAt - a.createdAt)
+    return [...running, ...this.completedSessions].sort((a, b) => b.createdAt - a.createdAt)
   }
 
   async spawnSession(prompt: string, parentId?: string): Promise<AgentSession> {
@@ -39,21 +52,14 @@ export class ClaudeCodeProvider implements AgentProvider {
     }
 
     const args = ['--output-format', 'stream-json', '--print', prompt]
-    const proc = spawn('claude', args, {
+    const proc = spawn(this.claudePath, args, {
       env: { ...process.env },
       stdio: ['ignore', 'pipe', 'pipe'],
     })
 
-    const entry: RunningProcess = {
-      proc,
-      session,
-      messageBuffer: [],
-      subscribers: new Set(),
-    }
+    const entry: RunningProcess = { proc, session, messageBuffer: [], subscribers: new Set() }
     this.processes.set(id, entry)
-
     this.attachProcessHandlers(id, entry)
-
     return session
   }
 
@@ -65,31 +71,23 @@ export class ClaudeCodeProvider implements AgentProvider {
   }
 
   async sendMessage(sessionId: string, text: string): Promise<void> {
+    // Running processes don't accept stdin in --print mode.
+    // Queue a follow-up: record the message now and it will be picked up as
+    // a new session when the current one finishes (handled by the consumer).
     const entry = this.processes.get(sessionId)
-    if (!entry) {
-      // Session completed — resume it with the new instruction
-      const completed = this.completedSessions.get(sessionId)
-      if (!(completed as any)?.claudeSessionId) {
-        throw new Error('Cannot redirect: session not found or no Claude session ID captured')
-      }
-      await this.spawnSession(text, sessionId)
-      return
-    }
-
-    // For a running process, we append a user message to the buffer
-    // and pipe it to stdin (claude CLI accepts continuation via stdin in interactive mode,
-    // but in --print mode we note this as a queued redirect and re-spawn when done)
     const msg = this.makeMessage(sessionId, 'user', text)
-    entry.messageBuffer.push(msg)
-    this.notifySubscribers(entry, [msg])
 
-    const systemMsg = this.makeMessage(
-      sessionId,
-      'system',
-      'Redirect queued — will apply when current task completes or you stop and resume the session.'
-    )
-    entry.messageBuffer.push(systemMsg)
-    this.notifySubscribers(entry, [systemMsg])
+    if (entry) {
+      entry.messageBuffer.push(msg)
+      this.notifySubscribers(entry, [msg])
+      const note = this.makeMessage(
+        sessionId,
+        'system',
+        'Redirect queued — the agent will pick this up after its current task completes.'
+      )
+      entry.messageBuffer.push(note)
+      this.notifySubscribers(entry, [note])
+    }
   }
 
   subscribeMessages(
@@ -97,19 +95,17 @@ export class ClaudeCodeProvider implements AgentProvider {
     onMessages: (messages: AgentMessage[]) => void
   ): () => void {
     const entry = this.processes.get(sessionId)
+
     if (!entry) {
-      // Completed session — deliver buffer once
-      const completed = this.completedSessions.get(sessionId)
+      // Completed session — deliver buffer and return
+      const completed = this.completedSessions.find((s) => s.id === sessionId)
       if (completed) {
-        const historical = (completed as any).__messages as AgentMessage[] | undefined
-        if (historical?.length) {
-          setTimeout(() => onMessages(historical), 0)
-        }
+        const msgs = (completed as AgentSession & { __messages?: AgentMessage[] }).__messages ?? []
+        if (msgs.length) setTimeout(() => onMessages([...msgs]), 0)
       }
       return () => {}
     }
 
-    // Deliver existing buffer immediately, then subscribe for new ones
     if (entry.messageBuffer.length > 0) {
       setTimeout(() => onMessages([...entry.messageBuffer]), 0)
     }
@@ -118,36 +114,29 @@ export class ClaudeCodeProvider implements AgentProvider {
   }
 
   async getInsights(sessionId: string): Promise<string | null> {
-    // For Claude Code we synthesize insights from recent output lines
     const entry = this.processes.get(sessionId)
-    const completed = this.completedSessions.get(sessionId)
-    const messages =
-      entry?.messageBuffer ??
-      ((completed as any)?.__messages as AgentMessage[] | undefined) ??
-      []
+    const completed = this.completedSessions.find((s) => s.id === sessionId) as
+      | (AgentSession & { __messages?: AgentMessage[] })
+      | undefined
 
-    const agentLines = messages
+    const messages = entry?.messageBuffer ?? completed?.__messages ?? []
+    const agentText = messages
       .filter((m) => m.source === 'agent')
       .map((m) => m.text)
       .join('\n')
-      .slice(-800)
+      .slice(-1000)
 
-    if (!agentLines) return null
-    return agentLines
+    return agentText || null
   }
 
   private attachProcessHandlers(id: string, entry: RunningProcess) {
-    const { proc, session } = entry
-
-    proc.stdout?.on('data', (data: Buffer) => {
-      const raw = data.toString()
-      // Try to parse stream-json lines; fall back to raw text
-      for (const line of raw.split('\n').filter(Boolean)) {
+    entry.proc.stdout?.on('data', (data: Buffer) => {
+      for (const line of data.toString().split('\n').filter(Boolean)) {
         this.handleOutputLine(id, entry, line)
       }
     })
 
-    proc.stderr?.on('data', (data: Buffer) => {
+    entry.proc.stderr?.on('data', (data: Buffer) => {
       const text = data.toString().trim()
       if (!text) return
       const msg = this.makeMessage(id, 'system', `[stderr] ${text}`)
@@ -155,21 +144,22 @@ export class ClaudeCodeProvider implements AgentProvider {
       this.notifySubscribers(entry, [msg])
     })
 
-    proc.on('close', (code) => {
+    entry.proc.on('close', (code) => {
       const status: AgentStatus = code === 0 ? 'done' : code === null ? 'stopped' : 'errored'
       this.finalizeSession(id, status)
     })
 
-    proc.on('error', (err) => {
-      if ((err as NodeJS.ErrnoException).code === 'ENOENT') {
-        const msg = this.makeMessage(
-          id,
-          'system',
-          'claude CLI not found. Install Claude Code: https://claude.ai/code'
-        )
-        entry.messageBuffer.push(msg)
-        this.notifySubscribers(entry, [msg])
-      }
+    entry.proc.on('error', (err) => {
+      const isNotFound = (err as NodeJS.ErrnoException).code === 'ENOENT'
+      const text = isNotFound
+        ? `claude CLI not found at "${this.claudePath}". ` +
+          `Install Claude Code (https://claude.ai/code) or set tower.claude.path in VS Code settings. ` +
+          `Tried fallbacks: ${FALLBACK_PATHS.join(', ')}`
+        : `Process error: ${err.message}`
+
+      const msg = this.makeMessage(id, 'system', text)
+      entry.messageBuffer.push(msg)
+      this.notifySubscribers(entry, [msg])
       this.finalizeSession(id, 'errored')
     })
   }
@@ -178,37 +168,35 @@ export class ClaudeCodeProvider implements AgentProvider {
     let text = line
     let source: AgentMessage['source'] = 'agent'
 
-    // Claude Code stream-json format: each line is a JSON object
     try {
-      const parsed = JSON.parse(line)
-      if (parsed.type === 'system' && parsed.session_id) {
+      const parsed = JSON.parse(line) as Record<string, unknown>
+
+      if (parsed.type === 'system' && typeof parsed.session_id === 'string') {
         entry.claudeSessionId = parsed.session_id
-        ;(entry.session as any).claudeSessionId = parsed.session_id
-        return // don't render system init line
+        return
       }
-      if (parsed.type === 'assistant' && parsed.message?.content) {
-        const content = parsed.message.content
+
+      if (parsed.type === 'assistant') {
+        const content = (parsed.message as Record<string, unknown>)?.content
         if (Array.isArray(content)) {
           text = content
-            .filter((b: any) => b.type === 'text')
-            .map((b: any) => b.text)
+            .filter((b: Record<string, unknown>) => b.type === 'text')
+            .map((b: Record<string, unknown>) => b.text as string)
             .join('')
-        } else {
-          text = String(content)
         }
       } else if (parsed.type === 'result') {
-        text = parsed.result ?? ''
+        text = (parsed.result as string) ?? ''
         source = 'system'
-      } else {
-        text = line
+      } else if (parsed.type === 'tool_use' || parsed.type === 'tool_result') {
+        // Tool call details — skip for the side panel; too noisy
+        return
       }
     } catch {
-      // Not JSON — raw text output
+      // Raw text line
     }
 
     if (!text.trim()) return
 
-    // Update the session's lastMessage for the node label
     entry.session.lastMessage = text.slice(0, 80)
     entry.session.updatedAt = Date.now()
 
@@ -224,20 +212,16 @@ export class ClaudeCodeProvider implements AgentProvider {
     entry.session.status = status
     entry.session.updatedAt = Date.now()
 
-    // Move to completed map, preserving the message buffer
-    const completed = { ...entry.session }
-    ;(completed as any).__messages = [...entry.messageBuffer]
-    if (entry.claudeSessionId) {
-      ;(completed as any).claudeSessionId = entry.claudeSessionId
-    }
-    this.completedSessions.set(id, completed)
+    const completed = {
+      ...entry.session,
+      __messages: [...entry.messageBuffer],
+    } as AgentSession & { __messages: AgentMessage[] }
+    this.completedSessions.unshift(completed)
+
     this.processes.delete(id)
 
-    // Notify any still-active subscribers of the final status
-    entry.subscribers.forEach((fn) => {
-      const msg = this.makeMessage(id, 'system', `Session ${status}.`)
-      fn([msg])
-    })
+    const msg = this.makeMessage(id, 'system', `Session ${status}.`)
+    entry.subscribers.forEach((fn) => fn([msg]))
     entry.subscribers.clear()
   }
 
@@ -245,7 +229,11 @@ export class ClaudeCodeProvider implements AgentProvider {
     entry.subscribers.forEach((fn) => fn(messages))
   }
 
-  private makeMessage(sessionId: string, source: AgentMessage['source'], text: string): AgentMessage {
+  private makeMessage(
+    sessionId: string,
+    source: AgentMessage['source'],
+    text: string
+  ): AgentMessage {
     return { id: uuidv4(), sessionId, source, text, createdAt: Date.now() }
   }
 }

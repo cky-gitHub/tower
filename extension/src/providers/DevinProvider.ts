@@ -8,13 +8,11 @@ interface DevinSession {
   session_id: string
   status: string
   title: string | null
-  prompt?: string
   created_at: number
   updated_at: number
   url: string
   acus_consumed: number
   parent_session_id: string | null
-  status_detail: string | null
 }
 
 interface DevinMessage {
@@ -30,7 +28,7 @@ export class DevinProvider implements AgentProvider {
   private pollIntervals = new Map<string, ReturnType<typeof setInterval>>()
 
   constructor(
-    private readonly getApiKey: () => string,
+    private readonly getApiKey: () => Promise<string>,
     private readonly getOrgId: () => string
   ) {}
 
@@ -71,18 +69,15 @@ export class DevinProvider implements AgentProvider {
         if (data.items?.length) {
           onMessages(data.items.map((m) => this.mapMessage(sessionId, m)))
         }
-        if (data.end_cursor) {
-          this.cursors.set(sessionId, data.end_cursor)
-        }
+        if (data.end_cursor) this.cursors.set(sessionId, data.end_cursor)
       } catch {
-        // swallow — session may have ended
+        // session may have ended
       }
     }
 
     poll()
     const interval = setInterval(poll, 2000)
     this.pollIntervals.set(sessionId, interval)
-
     return () => this.clearPoll(sessionId)
   }
 
@@ -126,7 +121,7 @@ export class DevinProvider implements AgentProvider {
 
   private mapMessage(sessionId: string, m: DevinMessage): AgentMessage {
     return {
-      id: m.event_id,
+      id: m.event_id || uuidv4(),
       sessionId,
       source: m.source === 'user' ? 'user' : 'agent',
       text: m.message,
@@ -143,9 +138,9 @@ export class DevinProvider implements AgentProvider {
     return 'running'
   }
 
-  private headers() {
+  private async headers(): Promise<Record<string, string>> {
     return {
-      Authorization: `Bearer ${this.getApiKey()}`,
+      Authorization: `Bearer ${await this.getApiKey()}`,
       'Content-Type': 'application/json',
     }
   }
@@ -155,7 +150,7 @@ export class DevinProvider implements AgentProvider {
   }
 
   private async get<T>(path: string): Promise<T> {
-    const res = await fetch(this.orgPath(path), { headers: this.headers() })
+    const res = await fetch(this.orgPath(path), { headers: await this.headers() })
     if (!res.ok) throw new Error(`Devin API ${res.status}: ${path}`)
     return res.json() as Promise<T>
   }
@@ -163,7 +158,7 @@ export class DevinProvider implements AgentProvider {
   private async post<T>(path: string, body: object): Promise<T> {
     const res = await fetch(this.orgPath(path), {
       method: 'POST',
-      headers: this.headers(),
+      headers: await this.headers(),
       body: JSON.stringify(body),
     })
     if (!res.ok) throw new Error(`Devin API ${res.status}: POST ${path}`)
@@ -173,7 +168,7 @@ export class DevinProvider implements AgentProvider {
   private async delete(path: string): Promise<void> {
     const res = await fetch(this.orgPath(path), {
       method: 'DELETE',
-      headers: this.headers(),
+      headers: await this.headers(),
     })
     if (!res.ok) throw new Error(`Devin API ${res.status}: DELETE ${path}`)
   }
