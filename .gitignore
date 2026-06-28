@@ -8,5 +8,8 @@ build/
 *.iml
 out/
 dist/
+# Allow pre-built extension artifacts so F5 works on fresh clone
+!extension/out/
+!extension/webview-dist/
 plugin/src/main/resources/webview/
 .DS_Store

@@ -125,13 +125,12 @@ export default function Canvas({ sessions, selectedId, onSelect, onSpawn }: Prop
         </div>
       )}
 
-      <button
-        onClick={onSpawn}
-        className="absolute bottom-6 right-6 w-12 h-12 rounded-full bg-blue-600 hover:bg-blue-500 active:scale-95 flex items-center justify-center text-2xl font-light shadow-xl transition-all z-10"
-        title="Spawn new agent (⌘N)"
-      >
-        +
-      </button>
+      {/* Double-click empty canvas to spawn */}
+      <div
+        className="absolute inset-0 pointer-events-none"
+        onDoubleClick={onSpawn}
+        style={{ pointerEvents: 'none' }}
+      />
     </div>
   )
 }

@@ -29,7 +29,10 @@ export class ClaudeCodeProvider implements AgentProvider {
    * @param claudePath Path to the `claude` binary. Defaults to `claude` (expects it in PATH).
    *   Configure via `tower.claude.path` in VS Code settings if the binary is not on PATH.
    */
-  constructor(private readonly claudePath: string = 'claude') {}
+  constructor(
+    private readonly claudePath: string = 'claude',
+    private readonly workspacePath?: string
+  ) {}
 
   async listSessions(): Promise<AgentSession[]> {
     const running = Array.from(this.processes.values()).map((r) => r.session)
@@ -54,6 +57,7 @@ export class ClaudeCodeProvider implements AgentProvider {
     const args = ['--output-format', 'stream-json', '--print', prompt]
     const proc = spawn(this.claudePath, args, {
       env: { ...process.env },
+      cwd: this.workspacePath,
       stdio: ['ignore', 'pipe', 'pipe'],
     })
 

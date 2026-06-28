@@ -9,12 +9,12 @@ let manager: AgentManager | undefined
 export function activate(context: vscode.ExtensionContext) {
   manager = new AgentManager()
 
-  // Claude Code provider — always registered
   const cfg = vscode.workspace.getConfiguration('tower')
   const claudePath = cfg.get<string>('claude.path')?.trim() || 'claude'
-  manager.register(new ClaudeCodeProvider(claudePath))
+  const workspacePath = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath
 
-  // Devin provider — only if org ID is configured
+  manager.register(new ClaudeCodeProvider(claudePath, workspacePath))
+
   const orgId = cfg.get<string>('devin.orgId')?.trim() ?? ''
   if (orgId) {
     manager.register(
@@ -26,6 +26,9 @@ export function activate(context: vscode.ExtensionContext) {
   }
 
   manager.startFleetPoll()
+
+  // Auto-open Tower in column 2 so it's immediately visible on the right
+  TowerPanel.createOrShow(context.extensionUri, manager)
 
   context.subscriptions.push(
     vscode.commands.registerCommand('tower.open', () => {
@@ -50,9 +53,11 @@ export function activate(context: vscode.ExtensionContext) {
       vscode.window.showInformationMessage('Tower: Devin API key cleared.')
     }),
 
-    // Re-read config when settings change
     vscode.workspace.onDidChangeConfiguration((e) => {
-      if (e.affectsConfiguration('tower.claude.path') || e.affectsConfiguration('tower.devin.orgId')) {
+      if (
+        e.affectsConfiguration('tower.claude.path') ||
+        e.affectsConfiguration('tower.devin.orgId')
+      ) {
         vscode.window
           .showInformationMessage('Tower: Reload window to apply provider changes.', 'Reload')
           .then((choice) => {

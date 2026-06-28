@@ -13,17 +13,15 @@ export class TowerPanel {
   private messageUnsub?: () => void
 
   static createOrShow(extensionUri: vscode.Uri, manager: AgentManager) {
-    const column = vscode.window.activeTextEditor?.viewColumn
-
     if (TowerPanel.instance) {
-      TowerPanel.instance.panel.reveal(column)
+      TowerPanel.instance.panel.reveal(vscode.ViewColumn.Two, true)
       return TowerPanel.instance
     }
 
     const panel = vscode.window.createWebviewPanel(
       TowerPanel.viewType,
       'Tower',
-      column ?? vscode.ViewColumn.One,
+      { viewColumn: vscode.ViewColumn.Two, preserveFocus: true },
       {
         enableScripts: true,
         localResourceRoots: [vscode.Uri.joinPath(extensionUri, 'webview-dist')],
